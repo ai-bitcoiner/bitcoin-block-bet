@@ -1,0 +1,8 @@
+# Node modules
+node_modules/
+npm-debug.log
+yarn-error.log
+
+# Environment Variables (Secrets)
+.env
+.DS_Store

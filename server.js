@@ -38,6 +38,9 @@ function getParity(hash) {
   };
 }
 
+// Import Secure Lightning Service
+const lightning = require('./services/lightning');
+
 // Connect to Mempool.space WebSocket for Live Blocks
 function connectToMempool() {
   const ws = new WebSocket('wss://mempool.space/api/v1/ws');
@@ -95,20 +98,42 @@ app.get('/api/history', (req, res) => {
   res.json(blockHistory);
 });
 
-// Simulate placing a bet (DLC Setup)
-app.post('/api/bet', (req, res) => {
+// Process Bet (Real or Mock)
+app.post('/api/bet', async (req, res) => {
   const { amount, side, paymentMethod } = req.body;
   
-  // In a real DLC app, this would return a PSBT or Lightning Invoice
-  // that locks funds into a multisig address.
-  
+  // Real Lightning Payment
+  if (paymentMethod === 'lightning' && lightning.isReady) {
+    try {
+      const invoice = await lightning.createBetInvoice(amount, `Bet on ${side} (Block Parity)`);
+      
+      // Monitor this invoice for payment
+      lightning.monitorInvoice(invoice.id, (paidInvoice) => {
+        console.log(`✅ Paid: ${paidInvoice.tokens} sats for ${side}`);
+        io.emit('bet-paid', { id: invoice.id, side, amount: paidInvoice.tokens });
+      });
+
+      return res.json({
+        success: true,
+        message: `Invoice generated for ${amount} sats`,
+        invoice: invoice.request, // Real BOLT11 Invoice
+        id: invoice.id,
+        status: 'pending_payment'
+      });
+    } catch (e) {
+      console.error("Lightning Error:", e);
+      return res.status(500).json({ error: "Lightning Node Error" });
+    }
+  }
+
+  // Mock Fallback (for testing/demo)
   const mockInvoice = paymentMethod === 'lightning' 
-    ? `lnbc${amount}n1...` // Mock Lightning Invoice
-    : `bc1q...`;           // Mock On-Chain Address
+    ? `lnbc${amount}n1...MOCK_INVOICE_FOR_TESTING` 
+    : `bc1q...MOCK_ADDRESS`;
 
   res.json({
     success: true,
-    message: `Bet placed on ${side} for ${amount} sats`,
+    message: `(MOCK) Bet placed on ${side} for ${amount} sats`,
     invoice: mockInvoice,
     status: 'pending_confirmation'
   });

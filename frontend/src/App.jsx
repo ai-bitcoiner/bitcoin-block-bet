@@ -2,8 +2,9 @@ import { useState, useEffect, useRef } from 'react';
 import io from 'socket.io-client';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CircleDollarSign, History, ArrowRight, Wallet, Activity, Globe, Zap } from 'lucide-react';
+import { CircleDollarSign, History, ArrowRight, Wallet, Activity, Globe, Zap, XCircle } from 'lucide-react';
 import { SimplePool, generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools';
+import { QRCodeSVG } from 'qrcode.react';
 import './App.css';
 
 const socket = io();
@@ -24,12 +25,22 @@ function App() {
   const [status, setStatus] = useState('Wait for Block...');
   const [paymentMethod, setPaymentMethod] = useState('lightning'); // 'lightning' | 'onchain'
   const [globalBets, setGlobalBets] = useState([]);
+  const [activeInvoice, setActiveInvoice] = useState(null); // BOLT11 string
 
   useEffect(() => {
     // Initial fetch
     axios.get('/api/history').then(res => {
       setHistory(res.data);
       if (res.data.length > 0) setLastBlock(res.data[0]);
+    });
+
+    // Payment Confirmation (Real-Time)
+    socket.on('bet-paid', (data) => {
+      console.log('Payment Confirmed:', data);
+      setActiveInvoice(null);
+      setStatus(`PAID! 🎉 Bet locked: ${data.amount} sats on ${data.side}`);
+      // Only now broadcast to Nostr (Proof of Payment)
+      publishNostrBet(data.side, data.amount);
     });
 
     // Real-time block updates
@@ -80,30 +91,20 @@ function App() {
 
     return () => {
       socket.off('new-block');
+      socket.off('bet-paid');
       sub.close();
     };
   }, [betSide]);
 
-  const placeBet = async (side) => {
-    setBetSide(side);
-    setStatus(`Bet Placed: ${betAmount} Sats on ${side} (${paymentMethod})`);
-    
-    // Simulate API call to setup DLC
+  const publishNostrBet = async (side, amount) => {
     try {
-      await axios.post('/api/bet', {
-        amount: betAmount,
-        side,
-        paymentMethod
-      });
-
-      // Broadcast to Nostr Network
       const eventTemplate = {
         kind: 1,
         created_at: Math.floor(Date.now() / 1000),
         tags: [['t', APP_TAG]],
         content: JSON.stringify({
           side,
-          amount: betAmount,
+          amount,
           method: paymentMethod,
           timestamp: Date.now()
         }),
@@ -112,14 +113,67 @@ function App() {
       const signedEvent = finalizeEvent(eventTemplate, sk);
       await Promise.any(pool.publish(RELAYS, signedEvent));
       console.log("Published bet to Nostr relays");
+    } catch (e) {
+      console.error("Nostr publish error", e);
+    }
+  };
+
+  const placeBet = async (side) => {
+    setBetSide(side);
+    setStatus(`Creating Invoice for ${betAmount} sats...`);
+    
+    try {
+      const res = await axios.post('/api/bet', {
+        amount: betAmount,
+        side,
+        paymentMethod
+      });
+
+      if (res.data.invoice && res.data.invoice.startsWith('lnbc')) {
+        // Real Invoice
+        setActiveInvoice(res.data.invoice);
+        setStatus(`Scan QR to pay ${betAmount} sats!`);
+      } else {
+        // Fallback for mock mode without invoice or non-LN
+        setStatus(`Bet Placed (Mock Mode): ${betAmount} Sats on ${side}`);
+        publishNostrBet(side, betAmount);
+      }
       
     } catch (e) {
       console.error(e);
+      setStatus("Error creating bet invoice.");
     }
   };
 
   return (
     <div className="app-container">
+      {/* Invoice Modal Overlay */}
+      <AnimatePresence>
+      {activeInvoice && (
+        <motion.div 
+          className="invoice-overlay"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+        >
+          <div className="invoice-modal">
+            <div className="modal-header">
+              <h3>Scan to Pay ⚡</h3>
+              <button onClick={() => setActiveInvoice(null)}><XCircle size={24} /></button>
+            </div>
+            <div className="qr-container">
+              <QRCodeSVG value={activeInvoice} size={256} level={"L"} includeMargin={true} />
+            </div>
+            <div className="invoice-text">
+              <p>Amount: {betAmount} sats</p>
+              <textarea readOnly value={activeInvoice} onClick={(e) => e.target.select()} />
+            </div>
+            <div className="status-spinner">Waiting for payment...</div>
+          </div>
+        </motion.div>
+      )}
+      </AnimatePresence>
+
       <header className="header">
         <h1><CircleDollarSign size={32} /> BlockHash Bet</h1>
         <div className="status-badge">
