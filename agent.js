@@ -9,11 +9,13 @@ const WebSocket = require('ws');
 const RELAYS = ['wss://relay.damus.io', 'wss://relay.primal.net', 'wss://nos.lol'];
 const AGENT_SK = generateSecretKey(); // In prod, load from .env (hex)
 const AGENT_PK = getPublicKey(AGENT_SK);
+const LIGHTNING_ADDRESS = 'waterheartwarming611802@getalby.com'; // Your Alby Address
 const FEE_PERCENT = 0.01; // 1% House Edge
 
 console.log("🤖 Zap Pool Manager Starting...");
 console.log("🔑 Agent Pubkey:", AGENT_PK);
 console.log("⚡ Fee:", FEE_PERCENT * 100, "%");
+console.log("📧 Lightning Address:", LIGHTNING_ADDRESS);
 
 // --- LIGHTNING SETUP ---
 let lnd = null;
@@ -36,6 +38,25 @@ const pool = new SimplePool();
 
 // --- MAIN LOOP ---
 async function start() {
+  // 0. Publish Metadata (Link Pubkey -> Lightning Address)
+  const metadata = {
+    name: "Bitcoin Block Bet Agent",
+    about: "Zap me with 'HEADS' or 'TAILS' to bet on the next block hash! 1% fee. #bitcoin-block-bet-v1",
+    lud16: LIGHTNING_ADDRESS, // Allows Zaps!
+    picture: "https://robohash.org/" + AGENT_PK
+  };
+
+  const kind0 = {
+    kind: 0,
+    created_at: Math.floor(Date.now() / 1000),
+    tags: [],
+    content: JSON.stringify(metadata),
+  };
+  
+  const signedKind0 = finalizeEvent(kind0, AGENT_SK);
+  await Promise.any(pool.publish(RELAYS, signedKind0));
+  console.log("📢 Announced Agent Metadata to Relays!");
+
   // 1. Connect to Mempool for Blocks
   connectMempool();
 
