@@ -218,8 +218,9 @@ async function publishMetadata() {
     created_at: Math.floor(Date.now() / 1000),
     tags: [],
     content: JSON.stringify({
-      name: "Bitcoin Block Bet House",
-      about: "Zap me HEADS or TAILS. P2P Betting Protocol.",
+      name: "AI-Bitcoiner",
+      display_name: "AI-Bitcoiner",
+      about: "The Official House Agent for Bitcoin Block Betting. Zap me HEADS or TAILS to play! 🎲⚡",
       lud16: LIGHTNING_ADDRESS,
       picture: "https://robohash.org/" + AGENT_PK
     })
