@@ -1,153 +1,186 @@
 import { useState, useEffect, useRef } from 'react';
-import io from 'socket.io-client';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CircleDollarSign, History, ArrowRight, Wallet, Activity, Globe, Zap, XCircle } from 'lucide-react';
+import { CircleDollarSign, History, ArrowRight, Wallet, Activity, Globe, Zap, XCircle, Bot } from 'lucide-react';
 import { SimplePool, generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools';
 import { QRCodeSVG } from 'qrcode.react';
 import './App.css';
 
-const socket = io();
-
-// Nostr Setup
-const pool = new SimplePool();
-const RELAYS = ['wss://relay.damus.io', 'wss://relay.primal.net'];
+// Decentralized Architecture
+const MEMPOOL_WS = 'wss://mempool.space/api/v1/ws';
+const RELAYS = ['wss://relay.damus.io', 'wss://relay.primal.net', 'wss://nos.lol'];
 const APP_TAG = 'bitcoin-block-bet-v1';
 const sk = generateSecretKey(); // Ephemeral private key for this session
 const pk = getPublicKey(sk);
+const pool = new SimplePool();
 
 function App() {
   const [lastBlock, setLastBlock] = useState(null);
   const [history, setHistory] = useState([]);
   const [flipping, setFlipping] = useState(false);
-  const [betSide, setBetSide] = useState(null); // 'HEADS' or 'TAILS'
-  const [betAmount, setBetAmount] = useState(1000); // Sats
+  const [betSide, setBetSide] = useState(null); 
+  const [betAmount, setBetAmount] = useState(1000); 
   const [status, setStatus] = useState('Wait for Block...');
-  const [paymentMethod, setPaymentMethod] = useState('lightning'); // 'lightning' | 'onchain'
   const [globalBets, setGlobalBets] = useState([]);
-  const [activeInvoice, setActiveInvoice] = useState(null); // BOLT11 string
+  const [activeInvoice, setActiveInvoice] = useState(null); 
+  const wsRef = useRef(null);
 
+  // 1. Connect to Mempool.space WebSocket (Directly)
   useEffect(() => {
-    // Initial fetch
-    axios.get('/api/history').then(res => {
-      setHistory(res.data);
-      if (res.data.length > 0) setLastBlock(res.data[0]);
+    // Initial fetch (REST API)
+    axios.get('https://mempool.space/api/v1/blocks/tip/height').then(async (res) => {
+      const height = res.data;
+      // Fetch last 10 blocks for history
+      try {
+        const blocksRes = await axios.get(`https://mempool.space/api/v1/blocks/${height}`);
+        const formattedHistory = blocksRes.data.slice(0, 10).map(b => getParity(b));
+        setHistory(formattedHistory);
+        setLastBlock(formattedHistory[0]);
+      } catch (e) { console.error(e); }
     });
 
-    // Payment Confirmation (Real-Time)
-    socket.on('bet-paid', (data) => {
-      console.log('Payment Confirmed:', data);
-      setActiveInvoice(null);
-      setStatus(`PAID! 🎉 Bet locked: ${data.amount} sats on ${data.side}`);
-      // Only now broadcast to Nostr (Proof of Payment)
-      publishNostrBet(data.side, data.amount);
-    });
+    const connectWS = () => {
+      const ws = new WebSocket(MEMPOOL_WS);
+      wsRef.current = ws;
 
-    // Real-time block updates
-    socket.on('new-block', (block) => {
-      console.log('New Block:', block);
-      setFlipping(true);
-      setStatus(`BLOCK ${block.height} MINED!`);
+      ws.onopen = () => {
+        console.log('Connected to Mempool.space');
+        ws.send(JSON.stringify({ action: 'want', data: ['blocks'] }));
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const message = JSON.parse(event.data);
+          if (message.block) {
+            handleNewBlock(message.block);
+          }
+        } catch (e) { console.error(e); }
+      };
+
+      ws.onclose = () => setTimeout(connectWS, 5000); // Reconnect
+    };
+
+    connectWS();
+    return () => wsRef.current?.close();
+  }, []);
+
+  // Helper: Determine Parity
+  const getParity = (block) => {
+    const lastChar = block.id.slice(-1);
+    const decimalValue = parseInt(lastChar, 16);
+    const isEven = decimalValue % 2 === 0;
+    return {
+      height: block.height,
+      hash: block.id,
+      lastChar,
+      winner: isEven ? 'TAILS' : 'HEADS',
+      parity: isEven ? 'EVEN' : 'ODD'
+    };
+  };
+
+  const handleNewBlock = (rawBlock) => {
+    const block = getParity(rawBlock);
+    console.log('New Block:', block);
+    setFlipping(true);
+    setStatus(`BLOCK ${block.height} MINED!`);
+    
+    setTimeout(() => {
+      setFlipping(false);
+      setLastBlock(block);
+      setHistory(prev => [block, ...prev].slice(0, 10));
       
-      // Simulate flip duration
-      setTimeout(() => {
-        setFlipping(false);
-        setLastBlock(block);
-        setHistory(prev => [block, ...prev].slice(0, 10));
-        
-        // Determine win/loss
-        if (betSide && block.winner === betSide) {
-          setStatus('YOU WON! 🎉 (Payout sent via DLC)');
-        } else if (betSide) {
-          setStatus('YOU LOST. 😢 (Better luck next block)');
-        } else {
-          setStatus('Round Complete.');
-        }
-        setBetSide(null); // Reset bet
-      }, 3000);
-    });
+      if (betSide && block.winner === betSide) {
+        setStatus('YOU WON! 🎉 (Waiting for AI Agent Payout...)');
+      } else if (betSide) {
+        setStatus('YOU LOST. 😢 (Better luck next block)');
+      } else {
+        setStatus('Round Complete.');
+      }
+      setBetSide(null);
+    }, 3000);
+  };
 
-    // Nostr Subscription
+  // 2. Connect to Nostr Relays (P2P Betting Layer)
+  useEffect(() => {
     const sub = pool.subscribeMany(RELAYS, [
       {
         kinds: [1],
         '#t': [APP_TAG],
-        since: Math.floor(Date.now() / 1000) - 300 // Last 5 mins
+        since: Math.floor(Date.now() / 1000) - 300 
       }
     ], {
       onevent(event) {
         try {
-          const betData = JSON.parse(event.content);
-          setGlobalBets(prev => {
-            // deduplicate by event ID
-            if (prev.find(b => b.id === event.id)) return prev;
-            return [{...betData, id: event.id, pubkey: event.pubkey}, ...prev].slice(0, 20);
-          });
-        } catch (e) {
-          // ignore malformed events
-        }
+          const data = JSON.parse(event.content);
+          
+          // Handle Global Bets Feed
+          if (data.type === 'bet_placed') {
+            setGlobalBets(prev => {
+              if (prev.find(b => b.id === event.id)) return prev;
+              return [{...data, id: event.id, pubkey: event.pubkey}, ...prev].slice(0, 20);
+            });
+          }
+
+          // Handle AI Agent Responses (targeted at me)
+          if (data.type === 'invoice_offer' && data.target_pubkey === pk) {
+             console.log("AI Agent offer received!", data);
+             setActiveInvoice(data.invoice);
+             setStatus(`AI Agent accepted! Scan to pay.`);
+          }
+          
+          if (data.type === 'payment_confirmed' && data.target_pubkey === pk) {
+             setActiveInvoice(null);
+             setStatus(`PAID! 🎉 Bet locked: ${data.amount} sats on ${data.side}`);
+          }
+
+        } catch (e) { }
       }
     });
 
-    return () => {
-      socket.off('new-block');
-      socket.off('bet-paid');
-      sub.close();
-    };
-  }, [betSide]);
+    return () => sub.close();
+  }, []);
 
-  const publishNostrBet = async (side, amount) => {
+  const placeBet = async (side) => {
+    setBetSide(side);
+    setStatus(`Broadcasting bet request for ${betAmount} sats...`);
+    
+    // Publish "Bet Request" to Nostr
+    // AI Agents listening will pick this up and reply with an invoice
     try {
       const eventTemplate = {
         kind: 1,
         created_at: Math.floor(Date.now() / 1000),
         tags: [['t', APP_TAG]],
         content: JSON.stringify({
+          type: 'bet_request',
           side,
-          amount,
-          method: paymentMethod,
+          amount: betAmount,
+          pubkey: pk, // My pubkey so agent can reply
           timestamp: Date.now()
         }),
       };
       
       const signedEvent = finalizeEvent(eventTemplate, sk);
       await Promise.any(pool.publish(RELAYS, signedEvent));
-      console.log("Published bet to Nostr relays");
-    } catch (e) {
-      console.error("Nostr publish error", e);
-    }
-  };
+      console.log("Published bet request to Nostr");
 
-  const placeBet = async (side) => {
-    setBetSide(side);
-    setStatus(`Creating Invoice for ${betAmount} sats...`);
-    
-    try {
-      const res = await axios.post('/api/bet', {
-        amount: betAmount,
+      // Optimistic update for UI (showing my own bet)
+      setGlobalBets(prev => [{
+        type: 'bet_placed',
         side,
-        paymentMethod
-      });
-
-      if (res.data.invoice && res.data.invoice.startsWith('lnbc')) {
-        // Real Invoice
-        setActiveInvoice(res.data.invoice);
-        setStatus(`Scan QR to pay ${betAmount} sats!`);
-      } else {
-        // Fallback for mock mode without invoice or non-LN
-        setStatus(`Bet Placed (Mock Mode): ${betAmount} Sats on ${side}`);
-        publishNostrBet(side, betAmount);
-      }
+        amount: betAmount,
+        pubkey: pk,
+        id: signedEvent.id
+      }, ...prev]);
       
     } catch (e) {
-      console.error(e);
-      setStatus("Error creating bet invoice.");
+      console.error("Nostr publish error", e);
+      setStatus("Failed to broadcast bet.");
     }
   };
 
   return (
     <div className="app-container">
-      {/* Invoice Modal Overlay */}
       <AnimatePresence>
       {activeInvoice && (
         <motion.div 
@@ -158,14 +191,14 @@ function App() {
         >
           <div className="invoice-modal">
             <div className="modal-header">
-              <h3>Scan to Pay ⚡</h3>
+              <h3><Bot size={20} /> AI Agent Accepted! ⚡</h3>
               <button onClick={() => setActiveInvoice(null)}><XCircle size={24} /></button>
             </div>
             <div className="qr-container">
               <QRCodeSVG value={activeInvoice} size={256} level={"L"} includeMargin={true} />
             </div>
             <div className="invoice-text">
-              <p>Amount: {betAmount} sats</p>
+              <p>Pay {betAmount} sats to lock bet</p>
               <textarea readOnly value={activeInvoice} onClick={(e) => e.target.select()} />
             </div>
             <div className="status-spinner">Waiting for payment...</div>
@@ -175,7 +208,7 @@ function App() {
       </AnimatePresence>
 
       <header className="header">
-        <h1><CircleDollarSign size={32} /> BlockHash Bet</h1>
+        <h1><CircleDollarSign size={32} /> BlockHash Bet <span className="beta-tag">P2P</span></h1>
         <div className="status-badge">
           <Activity size={16} /> Live: Mempool.space
         </div>
@@ -201,19 +234,8 @@ function App() {
 
         {/* Betting Controls */}
         <section className="betting-controls">
-          <h2>Place Your Bet (Next Block)</h2>
+          <h2>Request Bet (Vs. Network)</h2>
           
-          <div className="payment-toggle">
-            <button 
-              className={paymentMethod === 'lightning' ? 'active' : ''}
-              onClick={() => setPaymentMethod('lightning')}
-            >⚡ Lightning</button>
-            <button 
-              className={paymentMethod === 'onchain' ? 'active' : ''}
-              onClick={() => setPaymentMethod('onchain')}
-            >🔗 On-Chain</button>
-          </div>
-
           <div className="amount-input">
             <label>Amount (Sats)</label>
             <input 
@@ -239,6 +261,9 @@ function App() {
               BET TAILS (EVEN)
             </button>
           </div>
+          <div className="p2p-note">
+            <Globe size={14} /> Bets are broadcast to Nostr. An AI Agent must be online to accept.
+          </div>
         </section>
 
         {/* Live Nostr Feed */}
@@ -251,10 +276,11 @@ function App() {
                 <div className="feed-avatar">👤</div>
                 <div className="feed-content">
                   <span className="feed-user">{bet.pubkey.slice(0, 8)}...</span>
-                  bet <span className="feed-amount">{bet.amount} sats</span> on 
+                  {bet.type === 'bet_request' ? ' wants to bet ' : ' bet '}
+                  <span className="feed-amount">{bet.amount} sats</span> on 
                   <span className={`feed-side ${bet.side?.toLowerCase() || 'heads'}`}> {bet.side}</span>
                 </div>
-                {bet.method === 'lightning' && <Zap size={12} className="feed-icon" />}
+                <Zap size={12} className="feed-icon" />
               </div>
             ))}
           </div>
