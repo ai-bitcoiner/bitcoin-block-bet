@@ -1,5 +1,4 @@
-const { authenticatedLndGrpc, pay } = require('ln-service');
-const { SimplePool, generateSecretKey, getPublicKey, finalizeEvent } = require('nostr-tools');
+const { SimplePool, generateSecretKey, getPublicKey, finalizeEvent, nip04, nip19 } = require('nostr-tools');
 const fs = require('fs');
 const axios = require('axios');
 const WebSocket = require('ws');
@@ -8,33 +7,40 @@ require('dotenv').config();
 
 // --- CONFIG ---
 const RELAYS = ['wss://relay.damus.io', 'wss://relay.primal.net', 'wss://nos.lol'];
-const AGENT_SK = generateSecretKey(); // In prod, use process.env.AGENT_SK
+const AGENT_SK = process.env.AGENT_SK || generateSecretKey(); // Use .env in prod
 const AGENT_PK = getPublicKey(AGENT_SK);
 const LIGHTNING_ADDRESS = 'waterheartwarming611802@getalby.com'; 
 const FEE_PERCENT = 0.01;
 
-console.log("🤖 Zap Pool Manager (Persistent) Starting...");
-console.log("🔑 Agent Pubkey:", AGENT_PK);
+// --- NWC SETUP (The Bank) ---
+const NWC_STRING = process.env.NWC_CONNECTION_STRING;
+let nwcPubkey, nwcRelay, nwcSecret;
 
-// --- LIGHTNING SETUP ---
-let lnd = null;
-try {
-  const cert = fs.readFileSync(process.env.LND_CERT_PATH).toString('base64');
-  const macaroon = fs.readFileSync(process.env.LND_MACAROON_PATH).toString('base64');
-  const socket = process.env.LND_SOCKET;
-  const { lnd: _lnd } = authenticatedLndGrpc({ cert, macaroon, socket });
-  lnd = _lnd;
-  console.log("⚡ LND Connected");
-} catch (e) { console.error("❌ LND Failed (Read-Only Mode)"); }
+if (NWC_STRING) {
+  try {
+    const url = new URL(NWC_STRING.replace('nostr+walletconnect:', 'http:')); // Hack to parse custom protocol
+    nwcPubkey = url.host;
+    nwcRelay = url.searchParams.get('relay');
+    nwcSecret = url.searchParams.get('secret');
+    console.log("✅ NWC Configured (Alby/Mutiny)");
+  } catch (e) {
+    console.error("❌ Invalid NWC String:", e.message);
+  }
+} else {
+  console.warn("⚠️ No NWC String found. Agent cannot pay winners!");
+}
 
 const pool = new SimplePool();
 let state = db.load();
 
 // --- MAIN LOOP ---
 async function start() {
+  console.log("🤖 Zap Pool Manager (NWC Edition) Starting...");
+  console.log("🔑 Agent Pubkey:", AGENT_PK);
+  
   publishMetadata();
   
-  // 1. Recover State (Catch-up)
+  // 1. Recover State
   await recoverState();
 
   // 2. Listen for NEW Zaps
@@ -58,37 +64,25 @@ async function start() {
 // --- RECOVERY LOGIC ---
 async function recoverState() {
   console.log("🔄 Checking for missed data...");
-  
-  // A. Fetch missed Zaps
   const events = await pool.querySync(RELAYS, {
     kinds: [9735],
     '#p': [AGENT_PK],
     since: state.lastZapTimestamp + 1
   });
-  
   console.log(`   Found ${events.length} missed Zaps.`);
-  for (const ev of events) {
-    await handleZap(ev, false); // Don't save yet
-  }
+  for (const ev of events) await handleZap(ev, false);
 
-  // B. Fetch missed Blocks
   try {
     const tipRes = await axios.get('https://mempool.space/api/v1/blocks/tip/height');
     const currentTip = tipRes.data;
-    
     if (state.lastProcessedBlock > 0 && state.lastProcessedBlock < currentTip) {
       console.log(`   Missed blocks from ${state.lastProcessedBlock} to ${currentTip}`);
-      // Process sequential blocks
       for (let h = state.lastProcessedBlock + 1; h <= currentTip; h++) {
-        // Get hash & timestamp for this block
-        // (Mempool API doesn't allow batch fetch easily, getting hash by height)
         const hashRes = await axios.get(`https://mempool.space/api/v1/block-height/${h}`);
-        const hash = hashRes.data;
-        const blockRes = await axios.get(`https://mempool.space/api/v1/block/${hash}`);
+        const blockRes = await axios.get(`https://mempool.space/api/v1/block/${hashRes.data}`);
         await processBlock(blockRes.data); 
       }
     } else {
-      // First run or up to date
       state.lastProcessedBlock = currentTip;
       db.save(state);
     }
@@ -97,7 +91,6 @@ async function recoverState() {
 
 // --- HANDLERS ---
 async function handleZap(event, autoSave = true) {
-  // Deduplicate
   if (state.pendingBets.find(b => b.id === event.id)) return;
 
   const bolt11 = event.tags.find(t => t[0] === 'bolt11')?.[1];
@@ -106,12 +99,11 @@ async function handleZap(event, autoSave = true) {
 
   try {
     const zapRequest = JSON.parse(description);
-    const side = zapRequest.content.toUpperCase().trim(); // "HEADS" or "TAILS"
-    // In prod, decode bolt11 for real amount. Mocking 1000 sats here or need 'bolt11' lib
-    const amount = 1000; 
+    const side = zapRequest.content.toUpperCase().trim(); 
+    const amount = 1000; // In prod, use 'bolt11' lib to decode real amount
 
     if (side === 'HEADS' || side === 'TAILS') {
-      console.log(`🎰 Bet Logged: ${amount} sats on ${side} (${new Date(event.created_at * 1000).toISOString()})`);
+      console.log(`🎰 Bet Logged: ${amount} sats on ${side}`);
       state.pendingBets.push({
         id: event.id,
         pubkey: zapRequest.pubkey,
@@ -126,12 +118,7 @@ async function handleZap(event, autoSave = true) {
 }
 
 async function processBlock(block) {
-  // block.timestamp is in seconds
   console.log(`🧱 Processing Block ${block.height}...`);
-  
-  // 1. Filter bets meant for THIS block
-  // Logic: Bets placed BEFORE this block was mined, but AFTER the previous block
-  // Simply: Take all pending bets timestamped BEFORE block.timestamp
   const eligibleBets = state.pendingBets.filter(b => b.timestamp < block.timestamp);
   
   if (eligibleBets.length === 0) {
@@ -140,56 +127,89 @@ async function processBlock(block) {
     return;
   }
 
-  // 2. Determine Outcome
   const lastChar = block.id.slice(-1);
   const isEven = parseInt(lastChar, 16) % 2 === 0;
   const winnerSide = isEven ? 'TAILS' : 'HEADS';
   console.log(`   Outcome: ${winnerSide} (Hash: ...${lastChar})`);
 
-  // 3. Payout Logic
   const totalPot = eligibleBets.reduce((sum, b) => sum + b.amount, 0);
   const winners = eligibleBets.filter(b => b.side === winnerSide);
   const totalWinningBet = winners.reduce((sum, b) => sum + b.amount, 0);
-  
   const houseFee = Math.floor(totalPot * FEE_PERCENT);
   const payoutPool = totalPot - houseFee;
 
   console.log(`   💰 Pot: ${totalPot} | Winners: ${winners.length} | Payout Pool: ${payoutPool}`);
 
-  if (winners.length > 0 && lnd) {
+  if (winners.length > 0 && nwcSecret) {
     for (const winner of winners) {
       const share = (winner.amount / totalWinningBet) * payoutPool;
       const payout = Math.floor(share);
-      console.log(`      -> Sending ${payout} sats to ${winner.pubkey.slice(0,8)}`);
+      console.log(`      -> Paying ${payout} sats to ${winner.pubkey.slice(0,8)}`);
       await payWinner(winner.pubkey, payout);
     }
   } else if (winners.length > 0) {
-    console.log("      ⚠️ LND not connected. Payouts skipped (Simulated).");
+    console.log("      ⚠️ NWC not configured. Payouts skipped (Simulated).");
   } else {
     console.log("      😈 House Wins Everything.");
   }
 
-  // 4. Cleanup
-  // Remove processed bets from pending
   state.pendingBets = state.pendingBets.filter(b => b.timestamp >= block.timestamp);
   state.lastProcessedBlock = block.height;
   db.save(state);
 }
 
-// --- HELPERS ---
+// --- PAYOUT VIA NWC ---
 async function payWinner(pubkey, amount) {
   try {
+    // 1. Get Winner's Invoice (via LNURL)
     const event = await pool.get(RELAYS, { kinds: [0], authors: [pubkey] });
     if (!event) return;
     const profile = JSON.parse(event.content);
-    if (profile.lud16) {
-      const [name, domain] = profile.lud16.split('@');
-      const res = await axios.get(`https://${domain}/.well-known/lnurlp/${name}`);
-      const invRes = await axios.get(`${res.data.callback}?amount=${amount * 1000}`);
-      await pay({ lnd, request: invRes.data.pr });
-      console.log("      ✅ Payment Sent!");
-    }
-  } catch (e) { console.error(`      ❌ Pay Error: ${e.message}`); }
+    if (!profile.lud16) return;
+
+    const [name, domain] = profile.lud16.split('@');
+    const res = await axios.get(`https://${domain}/.well-known/lnurlp/${name}`);
+    
+    // Some LNURLs return metadata as string, others as object
+    const metadata = typeof res.data.metadata === 'string' ? res.data.metadata : JSON.stringify(res.data.metadata);
+    const zapReq = {
+      kind: 9734,
+      content: "Payout for Bitcoin Block Bet",
+      tags: [
+        ['p', pubkey],
+        ['amount', (amount * 1000).toString()],
+        ['relays', RELAYS[0]],
+        ['lnurl', res.data.callback]
+      ],
+      created_at: Math.floor(Date.now() / 1000),
+      pubkey: AGENT_PK
+    };
+    // Note: We don't have the user's private key to sign the Zap Request, but for a payout 
+    // we might just pay a standard invoice if they support it, or construct a generic zap.
+    // For simplicity, we just request a standard invoice.
+    
+    const invRes = await axios.get(`${res.data.callback}?amount=${amount * 1000}`);
+    const invoice = invRes.data.pr;
+
+    // 2. Pay via NWC
+    const command = { method: "pay_invoice", params: { invoice } };
+    const encrypted = await nip04.encrypt(AGENT_SK, nwcPubkey, JSON.stringify(command));
+    
+    const reqEvent = finalizeEvent({
+      kind: 23194,
+      content: encrypted,
+      tags: [['p', nwcPubkey]],
+      created_at: Math.floor(Date.now() / 1000),
+    }, AGENT_SK);
+
+    const ws = new WebSocket(nwcRelay);
+    ws.on('open', () => {
+      ws.send(JSON.stringify(["EVENT", reqEvent]));
+      console.log("      ✅ NWC Payout Command Sent!");
+      setTimeout(() => ws.close(), 2000);
+    });
+
+  } catch (e) { console.error(`      ❌ Payout Error: ${e.message}`); }
 }
 
 async function publishMetadata() {
@@ -200,10 +220,12 @@ async function publishMetadata() {
     content: JSON.stringify({
       name: "Bitcoin Block Bet House",
       about: "Zap me HEADS or TAILS. P2P Betting Protocol.",
-      lud16: LIGHTNING_ADDRESS
+      lud16: LIGHTNING_ADDRESS,
+      picture: "https://robohash.org/" + AGENT_PK
     })
-  }, AGENT_SK);
+  }, process.env.AGENT_SK || generateSecretKey());
   await Promise.any(pool.publish(RELAYS, event));
 }
 
 start();
+

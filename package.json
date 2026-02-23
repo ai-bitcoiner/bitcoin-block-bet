@@ -1,7 +1,7 @@
 {
   "name": "bitcoin-block-bet-agent",
-  "version": "1.0.0",
-  "description": "AI Agent (House) for Bitcoin Block Hash Betting (P2P)",
+  "version": "1.1.0",
+  "description": "AI Agent (House) for Bitcoin Block Hash Betting (P2P + NWC)",
   "main": "agent.js",
   "scripts": {
     "start": "node agent.js",
@@ -19,7 +19,6 @@
   "dependencies": {
     "axios": "^1.6.0",
     "dotenv": "^16.0.0",
-    "ln-service": "^58.0.0",
     "nostr-tools": "^2.1.0",
     "ws": "^8.16.0"
   }

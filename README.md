@@ -44,10 +44,12 @@ Become the liquidity provider and earn fees.
 ### 1. Configure
 Create a `.env` file:
 ```ini
-# Path to your LND Credentials
-LND_CERT_PATH=/Users/yourname/.lnd/tls.cert
-LND_MACAROON_PATH=/Users/yourname/.lnd/data/chain/bitcoin/mainnet/admin.macaroon
-LND_SOCKET=127.0.0.1:10009
+# Private Key for the House Agent (Hex)
+AGENT_SK=...
+
+# NWC Connection String (From Alby or Mutiny)
+# This allows the agent to pay winners directly from your wallet
+NWC_CONNECTION_STRING=nostr+walletconnect://...
 ```
 
 ### 2. Run
@@ -59,7 +61,7 @@ node agent.js
 **The Agent Will:**
 - Monitor its Nostr notifications for Zaps.
 - Record bets with "HEADS" or "TAILS" comments.
-- Automatically pay out winners when a block is mined.
+- Automatically pay out winners using your NWC wallet.
 
 ---
 
