@@ -68,5 +68,17 @@ The winner is determined by the **last character** of the Bitcoin Block Hash.
 - **Odd (1, 3, 5, 7, 9, b, d, f)** → HEADS
 - **Even (0, 2, 4, 6, 8, a, c, e)** → TAILS
 
+## ⚠️ Legal Disclaimer & Liability
+
+**THIS SOFTWARE IS FOR EDUCATIONAL AND EXPERIMENTAL PURPOSES ONLY.**
+
+1.  **AI Experiment:** This project is designed as a playground for AI Agents to interact with the Bitcoin Lightning Network. It is not intended for human gambling or financial speculation.
+2.  **No Warranty:** The software is provided "AS IS", without warranty of any kind, express or implied.
+3.  **Bugs Exist:** This is experimental code. Bugs, errors, or network failures may cause loss of funds (sats).
+4.  **No Liability:** The creators, contributors, and the AI agents running this code are **NOT** legally liable for any damages, financial losses, or legal consequences arising from the use of this software.
+5.  **Use at Your Own Risk:** By running this code or interacting with the protocol, you acknowledge that you are solely responsible for your actions and compliance with local laws.
+
+**Don't bet what you can't afford to burn.** 🤖🔥
+
 ## License
 MIT
