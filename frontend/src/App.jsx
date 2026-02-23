@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
-import { CircleDollarSign, History, ArrowRight, Wallet, Activity, Globe, Zap, XCircle, Bot } from 'lucide-react';
+import { CircleDollarSign, History, ArrowRight, Wallet, Activity, Globe, Zap, XCircle, Bot, HelpCircle, Info } from 'lucide-react';
 import { SimplePool, generateSecretKey, getPublicKey, finalizeEvent } from 'nostr-tools';
 import { QRCodeSVG } from 'qrcode.react';
 import './App.css';
@@ -10,7 +10,8 @@ import './App.css';
 const MEMPOOL_WS = 'wss://mempool.space/api/v1/ws';
 const RELAYS = ['wss://relay.damus.io', 'wss://relay.primal.net', 'wss://nos.lol'];
 const APP_TAG = 'bitcoin-block-bet-v1';
-const sk = generateSecretKey(); // Ephemeral private key for this session
+const HOUSE_LUD16 = 'waterheartwarming611802@getalby.com'; 
+const sk = generateSecretKey(); 
 const pk = getPublicKey(sk);
 const pool = new SimplePool();
 
@@ -20,17 +21,17 @@ function App() {
   const [flipping, setFlipping] = useState(false);
   const [betSide, setBetSide] = useState(null); 
   const [betAmount, setBetAmount] = useState(1000); 
-  const [status, setStatus] = useState('Wait for Block...');
+  const [status, setStatus] = useState('Waiting for next block...');
   const [globalBets, setGlobalBets] = useState([]);
   const [activeInvoice, setActiveInvoice] = useState(null); 
+  const [showHelp, setShowHelp] = useState(false);
   const wsRef = useRef(null);
 
-  // 1. Connect to Mempool.space WebSocket (Directly)
+  // 1. Connect to Mempool.space WebSocket
   useEffect(() => {
-    // Initial fetch (REST API)
+    // Initial fetch
     axios.get('https://mempool.space/api/v1/blocks/tip/height').then(async (res) => {
       const height = res.data;
-      // Fetch last 10 blocks for history
       try {
         const blocksRes = await axios.get(`https://mempool.space/api/v1/blocks/${height}`);
         const formattedHistory = blocksRes.data.slice(0, 10).map(b => getParity(b));
@@ -42,29 +43,19 @@ function App() {
     const connectWS = () => {
       const ws = new WebSocket(MEMPOOL_WS);
       wsRef.current = ws;
-
-      ws.onopen = () => {
-        console.log('Connected to Mempool.space');
-        ws.send(JSON.stringify({ action: 'want', data: ['blocks'] }));
-      };
-
+      ws.onopen = () => ws.send(JSON.stringify({ action: 'want', data: ['blocks'] }));
       ws.onmessage = (event) => {
         try {
           const message = JSON.parse(event.data);
-          if (message.block) {
-            handleNewBlock(message.block);
-          }
-        } catch (e) { console.error(e); }
+          if (message.block) handleNewBlock(message.block);
+        } catch (e) {}
       };
-
-      ws.onclose = () => setTimeout(connectWS, 5000); // Reconnect
+      ws.onclose = () => setTimeout(connectWS, 5000);
     };
-
     connectWS();
     return () => wsRef.current?.close();
   }, []);
 
-  // Helper: Determine Parity
   const getParity = (block) => {
     const lastChar = block.id.slice(-1);
     const decimalValue = parseInt(lastChar, 16);
@@ -73,14 +64,15 @@ function App() {
       height: block.height,
       hash: block.id,
       lastChar,
+      decimalValue, // For transparency
       winner: isEven ? 'TAILS' : 'HEADS',
-      parity: isEven ? 'EVEN' : 'ODD'
+      parity: isEven ? 'EVEN' : 'ODD',
+      timestamp: block.timestamp
     };
   };
 
   const handleNewBlock = (rawBlock) => {
     const block = getParity(rawBlock);
-    console.log('New Block:', block);
     setFlipping(true);
     setStatus(`BLOCK ${block.height} MINED!`);
     
@@ -88,11 +80,10 @@ function App() {
       setFlipping(false);
       setLastBlock(block);
       setHistory(prev => [block, ...prev].slice(0, 10));
-      
       if (betSide && block.winner === betSide) {
-        setStatus('YOU WON! 🎉 (Waiting for AI Agent Payout...)');
+        setStatus('YOU WON! 🎉 (Payout via Lightning)');
       } else if (betSide) {
-        setStatus('YOU LOST. 😢 (Better luck next block)');
+        setStatus('YOU LOST. 😢');
       } else {
         setStatus('Round Complete.');
       }
@@ -100,108 +91,134 @@ function App() {
     }, 3000);
   };
 
-  // 2. Connect to Nostr Relays (P2P Betting Layer)
+  // 2. Connect to Nostr Relays
   useEffect(() => {
     const sub = pool.subscribeMany(RELAYS, [
       {
-        kinds: [1],
+        kinds: [1, 9735], // Text notes and Zaps
         '#t': [APP_TAG],
         since: Math.floor(Date.now() / 1000) - 300 
       }
     ], {
       onevent(event) {
         try {
-          const data = JSON.parse(event.content);
-          
-          // Handle Global Bets Feed
-          if (data.type === 'bet_placed') {
-            setGlobalBets(prev => {
-              if (prev.find(b => b.id === event.id)) return prev;
-              return [{...data, id: event.id, pubkey: event.pubkey}, ...prev].slice(0, 20);
-            });
+          // Handle Zaps (Real Bets)
+          if (event.kind === 9735) {
+             const descTag = event.tags.find(t => t[0] === 'description')?.[1];
+             if (descTag) {
+                const req = JSON.parse(descTag);
+                const side = req.content; // "HEADS" or "TAILS"
+                if (side === 'HEADS' || side === 'TAILS') {
+                   addFeedItem({
+                     type: 'zap',
+                     side,
+                     amount: '???', // Real amount requires decoding bolt11
+                     pubkey: req.pubkey,
+                     id: event.id
+                   });
+                }
+             }
           }
-
-          // Handle AI Agent Responses (targeted at me)
-          if (data.type === 'invoice_offer' && data.target_pubkey === pk) {
-             console.log("AI Agent offer received!", data);
-             setActiveInvoice(data.invoice);
-             setStatus(`AI Agent accepted! Scan to pay.`);
+          // Handle Text Bets/Requests
+          else {
+            const data = JSON.parse(event.content);
+            if (data.type === 'bet_request' || data.type === 'bet_placed') {
+               addFeedItem({ ...data, id: event.id, pubkey: event.pubkey });
+            }
+            if (data.type === 'invoice_offer' && data.target_pubkey === pk) {
+               setActiveInvoice(data.invoice);
+               setStatus(`AI Agent accepted! Scan to pay.`);
+            }
           }
-          
-          if (data.type === 'payment_confirmed' && data.target_pubkey === pk) {
-             setActiveInvoice(null);
-             setStatus(`PAID! 🎉 Bet locked: ${data.amount} sats on ${data.side}`);
-          }
-
         } catch (e) { }
       }
     });
-
     return () => sub.close();
   }, []);
 
+  const addFeedItem = (item) => {
+    setGlobalBets(prev => {
+      if (prev.find(b => b.id === item.id)) return prev;
+      return [item, ...prev].slice(0, 20);
+    });
+  };
+
   const placeBet = async (side) => {
     setBetSide(side);
-    setStatus(`Broadcasting bet request for ${betAmount} sats...`);
+    setStatus(`Broadcasting bet request...`);
     
-    // Publish "Bet Request" to Nostr
-    // AI Agents listening will pick this up and reply with an invoice
+    // Broadcast intent to Nostr (AI Agents listen to this)
+    const eventTemplate = {
+      kind: 1,
+      created_at: Math.floor(Date.now() / 1000),
+      tags: [['t', APP_TAG]],
+      content: JSON.stringify({
+        type: 'bet_request',
+        side,
+        amount: betAmount,
+        pubkey: pk,
+        timestamp: Date.now()
+      }),
+    };
     try {
-      const eventTemplate = {
-        kind: 1,
-        created_at: Math.floor(Date.now() / 1000),
-        tags: [['t', APP_TAG]],
-        content: JSON.stringify({
-          type: 'bet_request',
-          side,
-          amount: betAmount,
-          pubkey: pk, // My pubkey so agent can reply
-          timestamp: Date.now()
-        }),
-      };
-      
       const signedEvent = finalizeEvent(eventTemplate, sk);
       await Promise.any(pool.publish(RELAYS, signedEvent));
-      console.log("Published bet request to Nostr");
-
-      // Optimistic update for UI (showing my own bet)
-      setGlobalBets(prev => [{
-        type: 'bet_placed',
+      addFeedItem({
+        type: 'bet_request',
         side,
         amount: betAmount,
         pubkey: pk,
         id: signedEvent.id
-      }, ...prev]);
-      
-    } catch (e) {
-      console.error("Nostr publish error", e);
-      setStatus("Failed to broadcast bet.");
-    }
+      });
+    } catch (e) { console.error(e); }
   };
 
   return (
     <div className="app-container">
+      {/* Help Modal */}
+      <AnimatePresence>
+        {showHelp && (
+          <motion.div className="invoice-overlay" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}>
+            <div className="invoice-modal help-modal">
+              <div className="modal-header">
+                <h3>How to Play ⚡</h3>
+                <button onClick={() => setShowHelp(false)}><XCircle /></button>
+              </div>
+              <div className="help-content">
+                <p><strong>1. Decentralized:</strong> No accounts. No servers.</p>
+                <p><strong>2. The Oracle:</strong> The <strong>last character</strong> of the next Bitcoin Block Hash determines the winner.</p>
+                <ul className="rules-list">
+                  <li><span className="heads">ODD (1,3,5,7,9,b,d,f)</span> = <strong>HEADS</strong></li>
+                  <li><span className="tails">EVEN (0,2,4,6,8,a,c,e)</span> = <strong>TAILS</strong></li>
+                </ul>
+                <p><strong>3. How to Bet:</strong></p>
+                <div className="zap-instruction">
+                  Zap <span className="highlight">{HOUSE_LUD16}</span>
+                  <br/>with comment <strong>HEADS</strong> or <strong>TAILS</strong>
+                </div>
+                <p className="small">Or use an AI Agent to play for you!</p>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Invoice Modal */}
       <AnimatePresence>
       {activeInvoice && (
-        <motion.div 
-          className="invoice-overlay"
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          exit={{ opacity: 0 }}
-        >
+        <motion.div className="invoice-overlay" initial={{opacity:0}} animate={{opacity:1}} exit={{opacity:0}}>
           <div className="invoice-modal">
             <div className="modal-header">
-              <h3><Bot size={20} /> AI Agent Accepted! ⚡</h3>
-              <button onClick={() => setActiveInvoice(null)}><XCircle size={24} /></button>
+              <h3>Pay to Lock Bet ⚡</h3>
+              <button onClick={() => setActiveInvoice(null)}><XCircle /></button>
             </div>
             <div className="qr-container">
               <QRCodeSVG value={activeInvoice} size={256} level={"L"} includeMargin={true} />
             </div>
             <div className="invoice-text">
-              <p>Pay {betAmount} sats to lock bet</p>
+              <p>Scan with Alby / Zeus / WoS</p>
               <textarea readOnly value={activeInvoice} onClick={(e) => e.target.select()} />
             </div>
-            <div className="status-spinner">Waiting for payment...</div>
           </div>
         </motion.div>
       )}
@@ -209,96 +226,92 @@ function App() {
 
       <header className="header">
         <h1><CircleDollarSign size={32} /> BlockHash Bet <span className="beta-tag">P2P</span></h1>
-        <div className="status-badge">
-          <Activity size={16} /> Live: Mempool.space
+        <div className="header-controls">
+          <div className="status-badge"><Activity size={14} /> Live</div>
+          <button className="help-btn" onClick={() => setShowHelp(true)}><HelpCircle size={20} /></button>
         </div>
       </header>
 
       <main className="main-content">
-        {/* Coin Flip Area */}
+        {/* Coin Flip */}
         <section className="coin-section">
           <div className={`coin-container ${flipping ? 'flipping' : ''}`}>
             <div className={`coin ${lastBlock?.winner === 'HEADS' ? 'heads' : 'tails'}`}>
-              <div className="side front">HEADS (Odd)</div>
-              <div className="side back">TAILS (Even)</div>
+              <div className="side front">HEADS</div>
+              <div className="side back">TAILS</div>
             </div>
           </div>
           <div className="result-display">
-            {flipping ? "MINING..." : lastBlock ? `${lastBlock.winner} (${lastBlock.parity})` : "WAITING..."}
+            {flipping ? "MINING..." : lastBlock ? `${lastBlock.winner}` : "WAITING..."}
           </div>
           <div className="hash-display">
-            Block #{lastBlock?.height} Hash: ...<span className="highlight">{lastBlock?.lastChar}</span>
+            Block <a href={`https://mempool.space/block/${lastBlock?.hash}`} target="_blank" className="block-link">#{lastBlock?.height}</a>
+            <br/>
+            Hash ends in: <span className="highlight-char">{lastBlock?.lastChar}</span>
+            <span className="parity-badge">{lastBlock?.parity}</span>
           </div>
           <div className="status-message">{status}</div>
         </section>
 
         {/* Betting Controls */}
         <section className="betting-controls">
-          <h2>Request Bet (Vs. Network)</h2>
-          
           <div className="amount-input">
-            <label>Amount (Sats)</label>
-            <input 
-              type="number" 
-              value={betAmount} 
-              onChange={(e) => setBetAmount(Number(e.target.value))}
-            />
+            <label>Wager (Sats)</label>
+            <input type="number" value={betAmount} onChange={(e) => setBetAmount(Number(e.target.value))} />
           </div>
-
           <div className="bet-buttons">
-            <button 
-              className="bet-btn heads" 
-              onClick={() => placeBet('HEADS')}
-              disabled={flipping || betSide}
-            >
+            <button className="bet-btn heads" onClick={() => placeBet('HEADS')} disabled={flipping || betSide}>
               BET HEADS (ODD)
             </button>
-            <button 
-              className="bet-btn tails" 
-              onClick={() => placeBet('TAILS')}
-              disabled={flipping || betSide}
-            >
+            <button className="bet-btn tails" onClick={() => placeBet('TAILS')} disabled={flipping || betSide}>
               BET TAILS (EVEN)
             </button>
           </div>
           <div className="p2p-note">
-            <Globe size={14} /> Bets are broadcast to Nostr. An AI Agent must be online to accept.
+            <Globe size={12} /> Broadcasts to Nostr. <span className="link" onClick={() => setShowHelp(true)}>How it works?</span>
           </div>
         </section>
 
-        {/* Live Nostr Feed */}
-        <section className="feed-section">
-          <h3><Globe size={20} /> Live Global Bets (Nostr)</h3>
-          <div className="feed-list">
-            {globalBets.length === 0 ? <div className="empty-feed">Listening for bets on Nostr relays...</div> : null}
-            {globalBets.map((bet) => (
-              <div key={bet.id} className="feed-item">
-                <div className="feed-avatar">👤</div>
-                <div className="feed-content">
-                  <span className="feed-user">{bet.pubkey.slice(0, 8)}...</span>
-                  {bet.type === 'bet_request' ? ' wants to bet ' : ' bet '}
-                  <span className="feed-amount">{bet.amount} sats</span> on 
-                  <span className={`feed-side ${bet.side?.toLowerCase() || 'heads'}`}> {bet.side}</span>
+        {/* Feeds Grid */}
+        <div className="feeds-grid">
+          {/* Live Bets */}
+          <section className="feed-section">
+            <h3><Zap size={18} /> Live Bets</h3>
+            <div className="feed-list">
+              {globalBets.length === 0 && <div className="empty-feed">Waiting for bets...</div>}
+              {globalBets.map((bet) => (
+                <div key={bet.id} className="feed-item">
+                  <div className={`feed-avatar ${bet.type === 'zap' ? 'zap-glow' : ''}`}>
+                    {bet.type === 'zap' ? '⚡' : '👤'}
+                  </div>
+                  <div className="feed-content">
+                    <span className="feed-user">{bet.pubkey.slice(0, 6)}</span>
+                    {bet.type === 'zap' ? ' zapped ' : ' wants '}
+                    <span className="feed-amount">{bet.amount}</span> on 
+                    <span className={`feed-side ${bet.side?.toLowerCase() || 'heads'}`}> {bet.side}</span>
+                  </div>
                 </div>
-                <Zap size={12} className="feed-icon" />
-              </div>
-            ))}
-          </div>
-        </section>
+              ))}
+            </div>
+          </section>
 
-        {/* History Tape */}
-        <section className="history-section">
-          <h3><History size={20} /> Recent Blocks</h3>
-          <div className="history-list">
-            {history.map((block) => (
-              <div key={block.height} className={`history-item ${block.winner.toLowerCase()}`}>
-                <span className="block-height">#{block.height}</span>
-                <span className="block-hash">...{block.lastChar}</span>
-                <span className="block-winner">{block.winner}</span>
-              </div>
-            ))}
-          </div>
-        </section>
+          {/* History */}
+          <section className="history-section">
+            <h3><History size={18} /> History</h3>
+            <div className="history-list">
+              {history.map((block) => (
+                <div key={block.height} className={`history-item ${block.winner.toLowerCase()}`}>
+                  <span className="block-height">#{block.height}</span>
+                  <div className="block-meta">
+                    <span className="hash-char">{block.lastChar}</span>
+                    <span className="parity-label">{block.parity}</span>
+                  </div>
+                  <span className="block-winner">{block.winner}</span>
+                </div>
+              ))}
+            </div>
+          </section>
+        </div>
       </main>
     </div>
   );
