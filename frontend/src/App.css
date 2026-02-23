@@ -221,10 +221,11 @@ body {
 }
 
 /* History */
-.history-section {
+.history-section, .feed-section {
   background: #334155;
   padding: 1rem;
   border-radius: 8px;
+  margin-bottom: 2rem;
 }
 
 .history-item {
@@ -240,3 +241,57 @@ body {
 
 .history-item.heads { color: #fbbf24; }
 .history-item.tails { color: #cbd5e1; }
+
+/* Nostr Feed */
+.feed-section h3 {
+  margin-top: 0;
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.empty-feed {
+  color: #94a3b8;
+  font-style: italic;
+  padding: 1rem;
+  text-align: center;
+}
+
+.feed-item {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.75rem 0;
+  border-bottom: 1px solid #475569;
+  font-size: 0.9rem;
+}
+
+.feed-avatar {
+  background: #1e293b;
+  width: 32px;
+  height: 32px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  border: 1px solid #475569;
+}
+
+.feed-content {
+  flex: 1;
+  color: #e2e8f0;
+}
+
+.feed-user {
+  font-family: monospace;
+  color: #94a3b8;
+}
+
+.feed-amount {
+  font-weight: bold;
+  color: #fbbf24;
+}
+
+.feed-side.heads { color: #fbbf24; font-weight: bold; }
+.feed-side.tails { color: #cbd5e1; font-weight: bold; }
+.feed-icon { color: #fbbf24; }
