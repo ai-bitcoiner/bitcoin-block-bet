@@ -1,22 +1,20 @@
-# 🎲 Bitcoin Block Hash Betting (P2P Edition)
+# ⚡ Bitcoin Block Hash Betting (Zap Pool Edition)
 
-A **Serverless, Unstoppable Betting Protocol** where users bet on whether the next Bitcoin block hash will be ODD or EVEN.
+A **Decentralized, Zap-based Betting Protocol** where users bet on whether the next Bitcoin block hash will be ODD or EVEN.
 
-**Zero Backend. Zero Database. Pure Peer-to-Peer.**
+**No Accounts. No Invoices. Just Zaps.**
 
-## 🌟 Architecture
-This application runs entirely in the browser and connects directly to decentralized networks:
-1.  **Oracle:** Connects to **Mempool.space WebSocket** to verify block hashes in real-time.
-2.  **Communication:** Uses **Nostr Relays** (`wss://relay.damus.io`, etc.) to broadcast bets and offers.
-3.  **Settlement:** Uses **Bitcoin Lightning Network** for instant, trust-minimized payments.
-
-There is no "House Server." Instead, anyone can run the **AI Agent Script** (`agent.js`) to become a Bookmaker and accept bets from the network.
+## 🌟 How It Works
+1.  **The Pot:** An AI Agent acts as the liquidity pool / escrow.
+2.  **Betting:** Users **ZAP** the Agent's Nostr profile with the comment **"HEADS"** or **"TAILS"**.
+3.  **Settlement:** When a block is mined, the Agent calculates the winners.
+4.  **Payout:** The Agent **Zaps Back** the winners instantly (minus a 1% house fee).
 
 ---
 
 ## 🚀 How to Play (Frontend)
 
-The frontend is a static React app. You can run it locally or host it on IPFS/Vercel.
+The frontend visualizes the game and the blockchain state.
 
 ### 1. Install & Run
 ```bash
@@ -27,24 +25,24 @@ npm run dev
 
 ### 2. Place a Bet
 1.  Open `http://localhost:5173`
-2.  Wait for a Bitcoin Block to be mined (watch the 3D Coin Flip!).
-3.  Click **BET HEADS** or **BET TAILS**.
-4.  Your browser signs a **Nostr Event** (`kind: 1`) requesting a bet.
-5.  If an **AI Agent** is online, it will reply with a Lightning Invoice.
-6.  Scan the QR code to lock your bet!
+2.  Connect your Nostr Extension (Alby, nos2x).
+3.  Click **Zap HEADS** or **Zap TAILS**.
+4.  Your wallet will zap the Agent directly.
+5.  Watch the feed to see your bet appear!
 
 ---
 
-## 🤖 How to Be "The House" (AI Agent)
+## 🤖 How to Run the "House" Agent
 
-Want to earn fees by accepting bets? Run the **AI Agent** on your own machine.
+Become the liquidity provider and earn fees.
 
 ### Prerequisites
 - A Bitcoin Lightning Node (**LND**)
+- A Nostr Profile with a Lightning Address (e.g., `agent@getalby.com`)
 - Node.js (v18+)
 
-### 1. Configure Your Node
-Create a `.env` file in the root directory (do NOT commit this!):
+### 1. Configure
+Create a `.env` file:
 ```ini
 # Path to your LND Credentials
 LND_CERT_PATH=/Users/yourname/.lnd/tls.cert
@@ -52,26 +50,23 @@ LND_MACAROON_PATH=/Users/yourname/.lnd/data/chain/bitcoin/mainnet/admin.macaroon
 LND_SOCKET=127.0.0.1:10009
 ```
 
-### 2. Run the Agent
+### 2. Run
 ```bash
 npm install
 node agent.js
 ```
 
-**What happens:**
-- The Agent connects to Nostr relays and listens for `bet_request`.
-- When a user bets, the Agent generates a **Hold Invoice** and replies on Nostr.
-- If the user pays, the Agent locks the funds.
-- *Coming Soon: Auto-payouts via Lightning.*
+**The Agent Will:**
+- Monitor its Nostr notifications for Zaps.
+- Record bets with "HEADS" or "TAILS" comments.
+- Automatically pay out winners when a block is mined.
 
 ---
 
-## 🛠 Transparency (Provably Fair)
+## 🛠 Transparency
 The winner is determined by the **last character** of the Bitcoin Block Hash.
 - **Odd (1, 3, 5, 7, 9, b, d, f)** → HEADS
 - **Even (0, 2, 4, 6, 8, a, c, e)** → TAILS
 
-Anyone can verify the result on any Block Explorer.
-
 ## License
-MIT - Fork it, clone it, run it.
+MIT
